@@ -14,7 +14,7 @@
 #define MOTORL 14 /* Goes to IN1 */
 #define MOTORR 15 /* Goes to IN2 */
 
-#define BUFFER_SIZE 100
+#define BUFFER_SIZE 20
 #define PRINT_TIMER 100000
 #define MEASURE_TIMER 10000
 
@@ -32,7 +32,7 @@ const float travel_range = travel_dist/2;
 
 const double ball_start = 24;
 const double ball_end = 988;
-const double ball_center = 496;
+const double ball_center = 512; // 496
 const double ball_range = (ball_end - ball_start)/2;
 const double pos_x_ratio = travel_range / (ball_end - ball_center);
 const double neg_x_ratio = travel_range / (ball_center - ball_start);
@@ -42,27 +42,28 @@ volatile double x;
 volatile float v;
 volatile float prev_v = 0;
 volatile float a;
+
+volatile float x_res;
+volatile float v_res;
+volatile float a_res;
+
 volatile int idx = 0;
 
 // Ticks for printing and calculating
 volatile char new_val = 0;
 volatile char print_now = 0;
 
-volatile float Kp = 8;
-volatile float Ki = 0;
-volatile float Kd = 3;
-volatile float Kdd = 8;
-volatile float response = 0;
+volatile double Kp = 1.35;
+volatile double Kd = 0.215;
+volatile double Kdd = 0.525;
+const float gain = 1;
+volatile double response = 0;
 
 double dist(int x){
-  return ((x-ball_center) >= 0) ? (x-ball_center)*pos_x_ratio : (x-ball_center)*neg_x_ratio;
+  return ((x-ball_center) >= 0) ? (x-ball_center)*pos_x_ratio/10.0 : (x-ball_center)*neg_x_ratio/10.0;
 }
 
 double x_buf[BUFFER_SIZE];
-double t_buf[BUFFER_SIZE];
-const int order = 2;
-double coeffs[order+1];
-
 float v_buf[BUFFER_SIZE];
 float a_buf[BUFFER_SIZE];
 
@@ -82,6 +83,8 @@ void print_x_buf();
 void calculate_motion();
 void calculate_averages();
 void print_state();
+void drive_cw(double);
+void drive_acw(double);
 
 void setup() {
 
@@ -95,8 +98,8 @@ void setup() {
   pinMode(ENCODER_Y, INPUT);
   pinMode(ENCODER_G, INPUT);
 
-  attachInterrupt(digitalPinToInterrupt(ENCODER_Y), yellow_ISR, RISING);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_G), green_ISR, RISING);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_Y), yellow_ISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_G), green_ISR, CHANGE);
 
   // Motor Setup:
   pinMode(MOTORL, OUTPUT);
@@ -104,8 +107,6 @@ void setup() {
 
   // Displacement Setup:
   pinMode(DISPlACEMENT, INPUT);
-
-  for (int i = 0; i < BUFFER_SIZE; i++) t_buf[i] = i*TICK_TIME;
 }
 
 void tenth_tick(){
@@ -116,24 +117,17 @@ void sys_tick(){
   new_val = 1;
 }
 
-double x_t;
-double v_t;
-double a_t;
-
 void print_state(){
   
   if (print_now){
-    x_t = coeffs[0]*t_buf[BUFFER_SIZE-1]*t_buf[BUFFER_SIZE-1] + coeffs[1]*t_buf[BUFFER_SIZE-1] + coeffs[2];
-    v_t = 2*coeffs[0]*t_buf[BUFFER_SIZE-1] + coeffs[1]*t_buf[BUFFER_SIZE-1];
-    a_t = 2*coeffs[0];
-
-    //Serial.print(" t: " + String(rotation, DEC));
+    Serial.print(" r: " + String(rotation, DEC));
     Serial.print(" x: " + String(x, DEC));
-    Serial.print(" x_t: " + String(x_t, DEC));
+    Serial.print(" p: " + String(x_res, DEC));
     Serial.print(" v: " + String(v, DEC));
-    Serial.print(" v_t: " + String(v_t, DEC));
-    Serial.print(" a_t: " + String(a_t, DEC) + "\n");
-    //Serial.print(" res: " + String(response/255, DEC) + "\n");
+    Serial.print(" d: " + String(v_res, DEC));
+    Serial.print(" a: " + String(a, DEC));
+    Serial.print(" dd: " + String(a_res, DEC));
+    Serial.print(" res: " + String(response, DEC) + "\n");
     print_now = 0;
   }
 }
@@ -145,24 +139,30 @@ void print_state(){
 //               Y __|       |_______|       |_______| 
 
 void green_ISR(){
-  if (digitalReadFast(ENCODER_Y)){
-    rotation--;
-  } else {
+  if (digitalReadFast(ENCODER_Y) != digitalReadFast(ENCODER_G)){
     rotation++;
+  } else {
+    rotation--;
   }
 };
 
 void yellow_ISR(){
-  if (digitalReadFast(ENCODER_G)){
+  if (digitalReadFast(ENCODER_G) == digitalReadFast(ENCODER_Y)){
     rotation++;
   } else {
-    rotation --;
+    rotation--;
   }
 };
 
 void loop() {
   calculate_motion();
-  print_state();
+  //print_state();
+  if (response > 0){
+    drive_cw(response);
+  } else {
+    drive_acw(-response);
+  }
+
 }
 
 
@@ -183,22 +183,30 @@ void calculate_motion(){
         x_buf[move_idx-1] = tmp;
       }
       x_buf[BUFFER_SIZE-1] = x;
-      int ret = fitCurve(order, BUFFER_SIZE/sizeof(double), t_buf, x_buf, sizeof(coeffs)/sizeof(double), coeffs);
-      if (ret != 0) Serial.println("ERROR");
       sum = (float)sum/BUFFER_SIZE;
       prev_v = v;
-      v = (sum - prev_sum);
-      a = (v - prev_v)/TICK_TIME;
+      x_res = Kp*x;
+      v_res = Kd*v;
+      a_res = Kdd*a;
+      v = (sum - prev_sum)/TICK_TIME;
+      a = rotation;
 
-      response = -(Kp*x + Kd*v + Kdd*a); 
+      response = -gain*(x_res + v_res + a_res); 
     }
     new_val = 0;
   }
 }
 
-void drive_motor(){
-  analogWrite(MOTORR, 0);
+void drive_cw(double v){
+  int in = v*(255.0/12.0);
+  analogWrite(MOTORR, in);
   analogWrite(MOTORL, 0);
+}
+
+void drive_acw(double v){
+  int in = v*(255.0/12.0);
+  analogWrite(MOTORR, 0);
+  analogWrite(MOTORL, in);
 }
 
 void print_x_buf(){
