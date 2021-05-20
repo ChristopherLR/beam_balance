@@ -8,15 +8,18 @@
 #define ENCODER_Y 2
 #define ENCODER_G 3
 #define PPERREV 134.4
+#define AR_LIM 15
+#define VR_LIM 15
+#define XR_LIM 15
 
 #define DISPlACEMENT 19
 
 #define MOTORL 14 /* Goes to IN1 */
 #define MOTORR 15 /* Goes to IN2 */
 
-#define BUFFER_SIZE 20
+#define BUFFER_SIZE 10
 #define PRINT_TIMER 100000
-#define MEASURE_TIMER 10000
+#define MEASURE_TIMER 5000
 
 IntervalTimer sys_clock;
 IntervalTimer print_clock;
@@ -32,7 +35,7 @@ const float travel_range = travel_dist/2;
 
 const double ball_start = 24;
 const double ball_end = 988;
-const double ball_center = 512; // 496
+const double ball_center = 512; // 496 // 528
 const double ball_range = (ball_end - ball_start)/2;
 const double pos_x_ratio = travel_range / (ball_end - ball_center);
 const double neg_x_ratio = travel_range / (ball_center - ball_start);
@@ -42,10 +45,12 @@ volatile double x;
 volatile float v;
 volatile float prev_v = 0;
 volatile float a;
+volatile float ar;
 
 volatile float x_res;
 volatile float v_res;
 volatile float a_res;
+volatile float ar_res;
 
 volatile int idx = 0;
 
@@ -53,14 +58,16 @@ volatile int idx = 0;
 volatile char new_val = 0;
 volatile char print_now = 0;
 
-volatile double Kp = 1.35;
-volatile double Kd = 0.215;
-volatile double Kdd = 0.525;
-const float gain = 1;
+// 12/494 
+
+volatile double Kp = 0.0062;  // 0.0062
+volatile double Kd = 0.00068; // 0.0007
+volatile double Kdd = 0.00;
+volatile double Kddr = -0.085; // - 0.080
 volatile double response = 0;
 
 double dist(int x){
-  return ((x-ball_center) >= 0) ? (x-ball_center)*pos_x_ratio/10.0 : (x-ball_center)*neg_x_ratio/10.0;
+  return x-ball_center;
 }
 
 double x_buf[BUFFER_SIZE];
@@ -120,13 +127,13 @@ void sys_tick(){
 void print_state(){
   
   if (print_now){
-    Serial.print(" r: " + String(rotation, DEC));
-    Serial.print(" x: " + String(x, DEC));
+//    Serial.print(" r: " + String(rotation, DEC));
+//    Serial.print(" x: " + String(x, DEC));
     Serial.print(" p: " + String(x_res, DEC));
-    Serial.print(" v: " + String(v, DEC));
+//    Serial.print(" v: " + String(v, DEC));
     Serial.print(" d: " + String(v_res, DEC));
-    Serial.print(" a: " + String(a, DEC));
-    Serial.print(" dd: " + String(a_res, DEC));
+//    Serial.print(" a: " + String(ar, DEC));
+    Serial.print(" dd: " + String(ar_res, DEC));
     Serial.print(" res: " + String(response, DEC) + "\n");
     print_now = 0;
   }
@@ -156,10 +163,13 @@ void yellow_ISR(){
 
 void loop() {
   calculate_motion();
-  //print_state();
-  if (response > 0){
+  print_state();
+
+  if (response < -0.005){
     drive_cw(response);
-  } else {
+  } 
+  
+  if ( response > 0.005){
     drive_acw(-response);
   }
 
@@ -185,26 +195,35 @@ void calculate_motion(){
       x_buf[BUFFER_SIZE-1] = x;
       sum = (float)sum/BUFFER_SIZE;
       prev_v = v;
+      v = (sum - prev_sum)/TICK_TIME;
+      a = (v - prev_v)/TICK_TIME;
       x_res = Kp*x;
       v_res = Kd*v;
       a_res = Kdd*a;
-      v = (sum - prev_sum)/TICK_TIME;
-      a = rotation;
+      ar = rotation;
+      ar_res = Kddr*ar;
 
-      response = -gain*(x_res + v_res + a_res); 
+      if(v_res > VR_LIM) { v_res = VR_LIM; }
+      if(v_res < -VR_LIM) { v_res = -VR_LIM; }
+      if(ar_res > AR_LIM) { ar_res = AR_LIM; }
+      if(ar_res < -AR_LIM) { ar_res = -AR_LIM;}
+      if(x_res > XR_LIM){ x_res = XR_LIM; }
+      if(x_res < -XR_LIM){ x_res = -XR_LIM; }
+
+      response = -(x_res + v_res + a_res + ar_res); 
     }
     new_val = 0;
   }
 }
 
 void drive_cw(double v){
-  int in = v*(255.0/12.0);
+  int in = v*(255.0/12.0) + 5;
   analogWrite(MOTORR, in);
   analogWrite(MOTORL, 0);
 }
 
 void drive_acw(double v){
-  int in = v*(255.0/12.0);
+  int in = v*(255.0/12.0) + 5;
   analogWrite(MOTORR, 0);
   analogWrite(MOTORL, in);
 }
