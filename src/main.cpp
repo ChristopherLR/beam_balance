@@ -1,9 +1,7 @@
 #include <Arduino.h>
-#include <stdint.h>
 
 #include <ADC.h>
 #include <ADC_util.h>
-#include "curveFitting.h"
 
 #define ENCODER_Y 2
 #define ENCODER_G 3
@@ -57,8 +55,6 @@ volatile int idx = 0;
 // Ticks for printing and calculating
 volatile char new_val = 0;
 volatile char print_now = 0;
-
-// 12/494
 
 volatile double Kp = 0.0065;  // 0.0062
 volatile double Kd = 0.00063; // 0.0007
